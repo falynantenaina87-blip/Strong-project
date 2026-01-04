@@ -49,11 +49,21 @@
 
 <script type="text/babel">
   function App() {
+    // 1. On définit l'action à faire quand on clique
+    const handleStart = () => {
+      alert("Lancement de la recherche de leads...");
+    };
+
     return (
       <div className="flex flex-col items-center justify-center h-screen space-y-4">
         <h1 className="text-4xl font-bold text-primary">Maps Prospector AI</h1>
         <p className="text-gray-400">Déploiement réussi sur Vercel.</p>
-        <button className="bg-accent hover:bg-opacity-80 px-6 py-2 rounded-lg transition-all">
+        
+        {/* 2. On lie l'action au bouton ici */}
+        <button 
+          onClick={handleStart}
+          className="bg-accent hover:bg-opacity-80 hover:scale-105 active:scale-95 px-6 py-2 rounded-lg transition-all font-semibold"
+        >
           Démarrer
         </button>
       </div>
