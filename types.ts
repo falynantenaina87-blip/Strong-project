@@ -10,14 +10,16 @@ export interface BusinessData {
   phone?: string;
   website?: string;
   address?: string;
-  placeId?: string; // Google Maps Place ID if available
+  email?: string; // Nouveau champ
+  placeId?: string;
 }
 
 export interface AIInsight {
-  score: number; // 0 to 100
+  score: number; // 0 to 10
   analysis_summary: string;
   suggested_offer: string;
   is_target: boolean;
+  prospection_reason?: string;
 }
 
 export type UserStatus = 'New' | 'Contacted' | 'Ignored' | 'Signed';
@@ -34,5 +36,5 @@ export interface Prospect {
 export interface SearchResult {
   business_data: BusinessData;
   location: Location;
-  source_id: string; // Temporary ID for the search session
+  source_id: string;
 }

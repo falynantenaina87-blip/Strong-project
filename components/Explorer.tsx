@@ -1,8 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { SearchResult, Prospect } from '../types';
-import { searchBusinesses, analyzeProspect } from '../services/geminiService';
+import { SearchResult, Prospect, BusinessData } from '../types';
+import { searchBusinesses, enrichWithEmail, calculateScore } from '../services/geminiService';
 import { BusinessCard } from './BusinessCard';
-import { AnalysisModal } from './AnalysisModal';
 import { saveProspect } from '../services/storageService';
 
 // Déclaration globale pour Google Maps
@@ -14,16 +13,21 @@ declare global {
 }
 
 export const Explorer: React.FC = () => {
+  // State Recherche
   const [query, setQuery] = useState('');
   const [location, setLocation] = useState('Paris');
   const [isSearching, setIsSearching] = useState(false);
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null);
   
-  // Analysis State
-  const [showAnalysis, setShowAnalysis] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [currentInsight, setCurrentInsight] = useState<any>(null);
+  // State Données
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [filteredResults, setFilteredResults] = useState<SearchResult[]>([]);
+  const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null);
+  const [isEnriching, setIsEnriching] = useState<Set<string>>(new Set()); // IDs en cours d'enrichissement email
+
+  // State Filtres
+  const [filterRating, setFilterRating] = useState<number | ''>('');
+  const [filterNoSite, setFilterNoSite] = useState(false);
+  const [minScore, setMinScore] = useState(0);
 
   // Maps State
   const mapRef = useRef<HTMLDivElement>(null);
@@ -31,371 +35,307 @@ export const Explorer: React.FC = () => {
   const markersRef = useRef<any[]>([]);
   const hasMapsKey = !!process.env.GOOGLE_MAPS_API_KEY;
 
+  // --- Logic ---
+
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query || !location) return;
     
     setIsSearching(true);
     setResults([]);
+    setFilteredResults([]);
     setSelectedResult(null);
     
-    // Combine for the prompt
-    const fullQuery = `${query} à ${location}`;
-    const data = await searchBusinesses(fullQuery);
+    // Appel du service amélioré (Volume)
+    const data = await searchBusinesses(query, location);
     
-    setResults(data);
+    // Calcul automatique du score local pour chaque résultat
+    const scoredData = data.map(res => {
+        const localScore = calculateScore(res.business_data);
+        // On attache un score temporaire dans l'objet pour le tri
+        return { ...res, _tempScore: localScore.score }; 
+    });
+
+    setResults(scoredData);
     setIsSearching(false);
   };
 
-  const handleAnalyze = async (result: SearchResult) => {
-    setSelectedResult(result);
-    setShowAnalysis(true);
-    setIsAnalyzing(true);
-    setCurrentInsight(null);
+  // Application des filtres
+  useEffect(() => {
+    let filtered = [...results];
 
-    const insight = await analyzeProspect(result.business_data);
-    
-    setCurrentInsight(insight);
-    setIsAnalyzing(false);
+    if (filterNoSite) {
+        filtered = filtered.filter(r => !r.business_data.website);
+    }
+
+    if (filterRating !== '') {
+        filtered = filtered.filter(r => (r.business_data.rating || 0) <= Number(filterRating));
+    }
+
+    if (minScore > 0) {
+        filtered = filtered.filter(r => (r as any)._tempScore >= minScore);
+    }
+
+    setFilteredResults(filtered);
+  }, [results, filterNoSite, filterRating, minScore]);
+
+  // Enrichissement Email (Un par un ou bouton global)
+  const handleEnrichEmail = async (res: SearchResult) => {
+      if (isEnriching.has(res.source_id)) return;
+
+      setIsEnriching(prev => new Set(prev).add(res.source_id));
+      
+      const email = await enrichWithEmail(res.business_data);
+      
+      if (email) {
+          // Mise à jour de la liste locale
+          setResults(prev => prev.map(item => 
+              item.source_id === res.source_id 
+              ? { ...item, business_data: { ...item.business_data, email } }
+              : item
+          ));
+      }
+
+      setIsEnriching(prev => {
+          const next = new Set(prev);
+          next.delete(res.source_id);
+          return next;
+      });
   };
 
-  const handleSaveProspect = () => {
-    if (!selectedResult || !currentInsight) return;
+  const handleExportCSV = () => {
+    if (filteredResults.length === 0) return;
 
-    const newProspect: Prospect = {
+    const headers = ['Nom', 'Adresse', 'Email', 'Téléphone', 'Site Web', 'Note', 'Score Potentiel'];
+    const rows = filteredResults.map(r => [
+        r.business_data.name,
+        r.business_data.address || '',
+        r.business_data.email || '',
+        r.business_data.phone || '',
+        r.business_data.website || '',
+        r.business_data.rating || '',
+        (r as any)._tempScore || ''
+    ]);
+
+    const csvContent = "data:text/csv;charset=utf-8," 
+        + headers.join(",") + "\n" 
+        + rows.map(e => e.map(c => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `prospects_${query}_${location}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleSaveToCRM = (res: SearchResult) => {
+    const localInsight = calculateScore(res.business_data);
+    const prospect: Prospect = {
         id: crypto.randomUUID(),
-        business_data: selectedResult.business_data,
-        location: selectedResult.location,
-        ai_insight: currentInsight,
+        business_data: res.business_data,
+        location: res.location,
+        ai_insight: { 
+            ...localInsight, 
+            score: localInsight.score * 10 // Remise à l'échelle 100 pour compatibilité CRM existant
+        }, 
         user_status: 'New',
         createdAt: Date.now()
     };
-
-    saveProspect(newProspect);
-    setShowAnalysis(false);
-    alert("Prospect sauvegardé dans le CRM !");
+    saveProspect(prospect);
+    // Petit feedback visuel ou toast ici si besoin
   };
 
-  // --- Google Maps Integration ---
-  
-  // Chargement du script Google Maps
+  // --- Google Maps Integration (Même logique qu'avant) ---
   useEffect(() => {
     if (!hasMapsKey) return;
-    if (window.google?.maps) return; // Déjà chargé
+    if (window.google?.maps) return; 
 
     const script = document.createElement('script');
     script.src = `https://maps.googleapis.com/maps/api/js?key=${process.env.GOOGLE_MAPS_API_KEY}&libraries=places`;
     script.async = true;
     script.defer = true;
     document.head.appendChild(script);
-
-    script.onload = () => {
-        initMap();
-    };
-
-    return () => {
-        // Cleanup if needed
-    };
+    script.onload = () => initMap();
   }, [hasMapsKey]);
 
-  // Initialisation de la carte
   const initMap = () => {
       if (!mapRef.current || !window.google) return;
-      
       googleMapInstance.current = new window.google.maps.Map(mapRef.current, {
           center: { lat: 48.8566, lng: 2.3522 },
           zoom: 12,
-          styles: [
+          disableDefaultUI: true,
+          styles: [/* Dark Mode Styles */
             { elementType: "geometry", stylers: [{ color: "#242f3e" }] },
             { elementType: "labels.text.stroke", stylers: [{ color: "#242f3e" }] },
             { elementType: "labels.text.fill", stylers: [{ color: "#746855" }] },
-            {
-              featureType: "administrative.locality",
-              elementType: "labels.text.fill",
-              stylers: [{ color: "#d59563" }],
-            },
-            {
-              featureType: "poi",
-              elementType: "labels.text.fill",
-              stylers: [{ color: "#d59563" }],
-            },
-            {
-              featureType: "poi.park",
-              elementType: "geometry",
-              stylers: [{ color: "#263c3f" }],
-            },
-            {
-              featureType: "poi.park",
-              elementType: "labels.text.fill",
-              stylers: [{ color: "#6b9a76" }],
-            },
-            {
-              featureType: "road",
-              elementType: "geometry",
-              stylers: [{ color: "#38414e" }],
-            },
-            {
-              featureType: "road",
-              elementType: "geometry.stroke",
-              stylers: [{ color: "#212a37" }],
-            },
-            {
-              featureType: "road",
-              elementType: "labels.text.fill",
-              stylers: [{ color: "#9ca5b3" }],
-            },
-            {
-              featureType: "road.highway",
-              elementType: "geometry",
-              stylers: [{ color: "#746855" }],
-            },
-            {
-              featureType: "road.highway",
-              elementType: "geometry.stroke",
-              stylers: [{ color: "#1f2835" }],
-            },
-            {
-              featureType: "road.highway",
-              elementType: "labels.text.fill",
-              stylers: [{ color: "#f3d19c" }],
-            },
-            {
-              featureType: "water",
-              elementType: "geometry",
-              stylers: [{ color: "#17263c" }],
-            },
-            {
-              featureType: "water",
-              elementType: "labels.text.fill",
-              stylers: [{ color: "#515c6d" }],
-            },
-            {
-              featureType: "water",
-              elementType: "labels.text.stroke",
-              stylers: [{ color: "#17263c" }],
-            },
-          ],
-          disableDefaultUI: true,
-          zoomControl: true,
+          ]
       });
   };
 
-  // Mise à jour des marqueurs quand les résultats changent
   useEffect(() => {
     if (!hasMapsKey || !googleMapInstance.current || !window.google) return;
-
     // Clear old markers
     markersRef.current.forEach(m => m.setMap(null));
     markersRef.current = [];
-
     const bounds = new window.google.maps.LatLngBounds();
 
-    results.forEach(res => {
+    filteredResults.forEach(res => {
         const marker = new window.google.maps.Marker({
             position: res.location,
             map: googleMapInstance.current,
             title: res.business_data.name,
-            animation: window.google.maps.Animation.DROP,
         });
-
-        marker.addListener('click', () => {
-            setSelectedResult(res);
-        });
-
+        marker.addListener('click', () => setSelectedResult(res));
         markersRef.current.push(marker);
         bounds.extend(res.location);
     });
 
-    if (results.length > 0) {
+    if (filteredResults.length > 0) {
         googleMapInstance.current.fitBounds(bounds);
-        // Avoid zooming in too much if only 1 result
-        if (results.length === 1) {
-            googleMapInstance.current.setZoom(15);
-        }
     }
-
-  }, [results, hasMapsKey]);
-
-  // Pan to selected result
-  useEffect(() => {
-     if (!hasMapsKey || !googleMapInstance.current || !selectedResult) return;
-     googleMapInstance.current.panTo(selectedResult.location);
-     googleMapInstance.current.setZoom(16);
-  }, [selectedResult, hasMapsKey]);
+  }, [filteredResults, hasMapsKey]);
 
 
-  // --- Fallback Visual (Mock) ---
-  const MapVisual = useCallback(() => {
-     return (
-        <div className="w-full h-full bg-[#111] relative overflow-hidden rounded-xl border border-gray-800 group">
-             {/* Decorative Grid */}
-             <div className="absolute inset-0 opacity-20" style={{ 
-                 backgroundImage: 'linear-gradient(#333 1px, transparent 1px), linear-gradient(90deg, #333 1px, transparent 1px)',
-                 backgroundSize: '40px 40px'
-             }}></div>
-             
-             {/* Center Label */}
-             <div className="absolute top-4 left-4 bg-black/60 backdrop-blur text-xs px-2 py-1 rounded border border-gray-700 text-gray-400 z-10">
-                Mode: Visualisation Simplifiée (Ajoutez VITE_GOOGLE_MAPS_API_KEY pour la vue réelle)
-             </div>
-
-             {/* Points */}
-             {results.map((res) => {
-                 const latSeed = (res.location.lat * 1000) % 100; 
-                 const lngSeed = (res.location.lng * 1000) % 100;
-                 const top = Math.abs(latSeed) + '%';
-                 const left = Math.abs(lngSeed) + '%';
-                 
-                 const isSelected = selectedResult?.source_id === res.source_id;
-
-                 return (
-                     <button
-                        key={res.source_id}
-                        onClick={() => setSelectedResult(res)}
-                        className={`absolute w-4 h-4 -ml-2 -mt-2 rounded-full border-2 transition-all duration-300 transform hover:scale-150 z-10
-                            ${isSelected ? 'bg-primary border-white scale-125 shadow-[0_0_15px_rgba(59,130,246,0.8)]' : 'bg-surface border-primary/50 hover:bg-primary'}
-                        `}
-                        style={{ top, left }}
-                        title={res.business_data.name}
-                     >
-                        {isSelected && (
-                            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 whitespace-nowrap bg-gray-900 text-white text-xs px-2 py-1 rounded border border-gray-700 z-20">
-                                {res.business_data.name}
-                            </div>
-                        )}
-                     </button>
-                 );
-             })}
-
-             {results.length === 0 && !isSearching && (
-                 <div className="absolute inset-0 flex items-center justify-center text-gray-600">
-                     <p>Effectuez une recherche pour voir les résultats</p>
-                 </div>
-             )}
-        </div>
-     );
-  }, [results, selectedResult, isSearching]);
+  // --- Render ---
 
   return (
     <div className="flex h-full">
-      {/* Sidebar List */}
-      <div className="w-96 flex flex-col border-r border-gray-800 bg-background z-10 shadow-xl">
-        <div className="p-4 border-b border-gray-800">
-            <form onSubmit={handleSearch} className="space-y-3">
-                <div>
-                    <label className="text-xs font-semibold text-gray-500 uppercase ml-1">Métier / Mot-clé</label>
-                    <input 
-                        type="text" 
-                        value={query}
-                        onChange={(e) => setQuery(e.target.value)}
-                        placeholder="ex: Boulangerie, Avocat..."
-                        className="w-full bg-surface border border-gray-700 rounded-lg px-4 py-2 mt-1 text-white focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all"
-                    />
-                </div>
-                <div>
-                    <label className="text-xs font-semibold text-gray-500 uppercase ml-1">Ville</label>
-                    <input 
-                        type="text" 
-                        value={location}
-                        onChange={(e) => setLocation(e.target.value)}
-                        placeholder="ex: Lyon, Paris..."
-                        className="w-full bg-surface border border-gray-700 rounded-lg px-4 py-2 mt-1 text-white focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all"
-                    />
-                </div>
-                <button 
-                    type="submit" 
-                    disabled={isSearching}
-                    className="w-full bg-primary hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-2 rounded-lg transition-all shadow-lg shadow-primary/20 flex items-center justify-center gap-2"
-                >
-                    {isSearching ? (
-                        <>
-                           <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                           <span>Recherche...</span>
-                        </>
-                    ) : 'Rechercher sur Maps'}
+      {/* Sidebar - Controls & List */}
+      <div className="w-[450px] flex flex-col border-r border-gray-800 bg-background z-10 shadow-xl">
+        
+        {/* Search Header */}
+        <div className="p-4 border-b border-gray-800 space-y-3 bg-surface/50">
+            <form onSubmit={handleSearch} className="flex gap-2">
+                <input 
+                    type="text" value={query} onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Métier (ex: Plombier)"
+                    className="flex-1 bg-background border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-primary outline-none"
+                />
+                <input 
+                    type="text" value={location} onChange={(e) => setLocation(e.target.value)}
+                    placeholder="Ville"
+                    className="w-24 bg-background border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-primary outline-none"
+                />
+                <button type="submit" disabled={isSearching} className="bg-primary hover:bg-blue-600 px-3 rounded-lg text-white">
+                    {isSearching ? '...' : '🔍'}
                 </button>
             </form>
+
+            {/* Filters Toolbar */}
+            <div className="flex flex-wrap gap-2 items-center">
+                <select 
+                    value={filterRating} 
+                    onChange={(e) => setFilterRating(e.target.value ? Number(e.target.value) : '')}
+                    className="bg-gray-800 text-xs text-white border border-gray-700 rounded px-2 py-1"
+                >
+                    <option value="">Toutes Notes</option>
+                    <option value="3.5">Note &lt; 3.5</option>
+                    <option value="4.0">Note &lt; 4.0</option>
+                    <option value="4.5">Note &lt; 4.5</option>
+                </select>
+
+                <label className="flex items-center gap-1 cursor-pointer bg-gray-800 px-2 py-1 rounded border border-gray-700">
+                    <input type="checkbox" checked={filterNoSite} onChange={(e) => setFilterNoSite(e.target.checked)} className="rounded bg-gray-700 border-gray-600" />
+                    <span className="text-xs text-gray-300">Sans Site</span>
+                </label>
+
+                <div className="flex-1"></div>
+
+                {filteredResults.length > 0 && (
+                    <button 
+                        onClick={handleExportCSV}
+                        className="text-xs flex items-center gap-1 bg-green-600/20 text-green-400 border border-green-600/30 px-2 py-1 rounded hover:bg-green-600/30"
+                    >
+                        📄 CSV
+                    </button>
+                )}
+            </div>
+            
+            <div className="flex justify-between items-center text-xs text-gray-500">
+                <span>{filteredResults.length} résultats trouvés</span>
+                {isSearching && <span className="text-primary animate-pulse">Recherche étendue en cours...</span>}
+            </div>
         </div>
         
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 pb-20">
-            {results.length > 0 ? (
-                results.map((res) => (
-                    <BusinessCard 
-                        key={res.source_id}
-                        data={res.business_data}
-                        location={res.location}
-                        isSelected={selectedResult?.source_id === res.source_id}
-                        onClick={() => setSelectedResult(res)}
-                        actionButton={
-                            <button
-                                onClick={(e) => { e.stopPropagation(); handleAnalyze(res); }}
-                                className="p-2 rounded-lg bg-accent/10 text-accent hover:bg-accent/20 border border-accent/20 transition-colors"
-                                title="Analyser avec Gemini"
-                            >
-                                <span className="text-lg">✨</span>
-                            </button>
-                        }
-                    />
-                ))
-            ) : (
-                <div className="text-center mt-10 text-gray-500 space-y-2">
-                    <div className="text-4xl opacity-20">🗺️</div>
-                    <p>Entrez une recherche pour commencer la prospection.</p>
+        {/* Results List */}
+        <div className="flex-1 overflow-y-auto p-3 space-y-3 pb-20 bg-background">
+            {filteredResults.map((res) => {
+                const score = (res as any)._tempScore || 0;
+                const enriching = isEnriching.has(res.source_id);
+                
+                return (
+                    <div key={res.source_id} className="relative group">
+                         <BusinessCard 
+                            data={res.business_data}
+                            location={res.location}
+                            isSelected={selectedResult?.source_id === res.source_id}
+                            onClick={() => setSelectedResult(res)}
+                            actionButton={
+                                <div className="flex flex-col gap-2">
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); handleSaveToCRM(res); }}
+                                        className="p-2 rounded bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20"
+                                        title="Ajouter au CRM"
+                                    >
+                                        + CRM
+                                    </button>
+                                </div>
+                            }
+                        />
+                        {/* Overlay Score & Email Actions */}
+                        <div className="absolute top-2 right-16 flex gap-2">
+                            <span className={`text-xs font-bold px-2 py-1 rounded border ${
+                                score >= 7 ? 'bg-green-500/20 text-green-400 border-green-500/30' :
+                                score >= 5 ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
+                                'bg-gray-700 text-gray-400 border-gray-600'
+                            }`}>
+                                Score: {score}/10
+                            </span>
+                        </div>
+                        
+                        {/* Email Fetcher Bar inside card */}
+                        <div className="absolute bottom-2 right-4 flex items-center gap-2">
+                            {res.business_data.email ? (
+                                <span className="text-xs bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded border border-purple-500/30">
+                                    📧 {res.business_data.email}
+                                </span>
+                            ) : (
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); handleEnrichEmail(res); }}
+                                    disabled={enriching}
+                                    className="text-xs bg-gray-800 text-gray-400 hover:text-white px-2 py-0.5 rounded border border-gray-700"
+                                >
+                                    {enriching ? 'Recherche email...' : '🔍 Trouver Email'}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                );
+            })}
+            
+            {filteredResults.length === 0 && !isSearching && (
+                <div className="text-center mt-10 text-gray-500">
+                    Utilisez la recherche pour commencer.
                 </div>
             )}
         </div>
       </div>
 
       {/* Map Area */}
-      <div className="flex-1 bg-surface p-4 relative">
-         {/* Conditionnal Rendering : Real Map vs Mock */}
+      <div className="flex-1 bg-surface relative">
          {hasMapsKey ? (
-            <div className="w-full h-full rounded-xl overflow-hidden border border-gray-800 relative">
-                <div ref={mapRef} className="w-full h-full bg-gray-900" />
-                {isSearching && (
-                    <div className="absolute inset-0 bg-black/50 backdrop-blur-sm z-20 flex items-center justify-center">
-                         <div className="text-primary font-bold animate-pulse">Recherche Maps en cours...</div>
-                    </div>
-                )}
-            </div>
+            <div ref={mapRef} className="w-full h-full bg-gray-900" />
          ) : (
-            <MapVisual />
-         )}
-         
-         {selectedResult && (
-             <div className="absolute bottom-8 left-8 right-8 bg-surface/90 backdrop-blur-md border border-gray-700 p-4 rounded-xl shadow-2xl z-20 flex justify-between items-center animate-slide-up">
-                 <div>
-                     <h3 className="text-xl font-bold text-white">{selectedResult.business_data.name}</h3>
-                     <p className="text-gray-400">{selectedResult.business_data.address}</p>
-                 </div>
-                 <div className="flex gap-3">
-                     <a 
-                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(selectedResult.business_data.name + ' ' + selectedResult.business_data.address)}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white font-medium transition-colors"
-                     >
-                         Ouvrir G-Maps
-                     </a>
-                     <button
-                        onClick={() => handleAnalyze(selectedResult)}
-                        className="px-4 py-2 bg-accent hover:bg-violet-600 rounded-lg text-white font-medium shadow-lg shadow-accent/20 flex items-center gap-2 transition-colors"
-                     >
-                         <span>✨ Analyser</span>
-                     </button>
-                 </div>
-             </div>
+            <div className="w-full h-full flex items-center justify-center text-gray-500 bg-[#111]">
+                <div className="text-center">
+                    <p className="mb-2">Mode Grille (Sans clé API Maps JS)</p>
+                    <p className="text-sm opacity-50">Les résultats sont affichés dans la liste à gauche</p>
+                </div>
+            </div>
          )}
       </div>
-
-      <AnalysisModal 
-         isOpen={showAnalysis} 
-         onClose={() => setShowAnalysis(false)}
-         onSave={handleSaveProspect}
-         isAnalyzing={isAnalyzing}
-         insight={currentInsight}
-         businessName={selectedResult?.business_data.name || ''}
-      />
     </div>
   );
 };
