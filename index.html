@@ -41,36 +41,29 @@
 <body class="bg-background text-gray-100 h-screen overflow-hidden">
     <div id="root"></div>
 
-    <script type="module">
-      import React from 'react';
-      import { createRoot } from 'react-dom/client';
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-      // On utilise React.createElement au lieu des balises HTML directes (JSX)
-      function App() {
-        return React.createElement(
-          'div',
-          { className: 'flex flex-col items-center justify-center h-screen space-y-4' },
-          [
-            React.createElement('h1', { 
-              className: 'text-4xl font-bold text-primary', 
-              key: 'title' 
-            }, 'Maps Prospector AI'),
-            React.createElement('p', { 
-              className: 'text-gray-400', 
-              key: 'desc' 
-            }, "L'interface est maintenant opérationnelle sur Vercel."),
-            React.createElement('button', { 
-              className: 'bg-accent hover:bg-opacity-80 px-6 py-2 rounded-lg transition-all', 
-              key: 'btn' 
-            }, 'Démarrer la recherche')
-          ]
-        );
-      }
+<div id="root"></div>
 
-      const container = document.getElementById('root');
-      const root = createRoot(container);
-      root.render(React.createElement(App));
-    </script>
+<script type="text/babel">
+  function App() {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen space-y-4">
+        <h1 className="text-4xl font-bold text-primary">Maps Prospector AI</h1>
+        <p className="text-gray-400">Déploiement réussi sur Vercel.</p>
+        <button className="bg-accent hover:bg-opacity-80 px-6 py-2 rounded-lg transition-all">
+          Démarrer
+        </button>
+      </div>
+    );
+  }
+
+  const root = ReactDOM.createRoot(document.getElementById('root'));
+  root.render(<App />);
+</script>
+
 </body>
 
 </html>
