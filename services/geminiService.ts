@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type, Schema } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { AIInsight, BusinessData, SearchResult } from "../types";
 
 // Note: In a real production app, never expose keys on client side.
