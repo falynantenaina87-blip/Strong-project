@@ -42,24 +42,36 @@
     <div id="root"></div>
 
     <script type="module">
-      import React, { useState } from 'react';
+      import React from 'react';
       import { createRoot } from 'react-dom/client';
 
+      // On utilise React.createElement au lieu des balises HTML directes (JSX)
       function App() {
-        return (
-          <div class="flex flex-col items-center justify-center h-screen space-y-4">
-            <h1 class="text-4xl font-bold text-primary">Maps Prospector AI</h1>
-            <p class="text-gray-400">L'interface React est maintenant active.</p>
-            <button class="bg-accent hover:bg-opacity-80 px-6 py-2 rounded-lg transition-all">
-              Commencer la prospection
-            </button>
-          </div>
+        return React.createElement(
+          'div',
+          { className: 'flex flex-col items-center justify-center h-screen space-y-4' },
+          [
+            React.createElement('h1', { 
+              className: 'text-4xl font-bold text-primary', 
+              key: 'title' 
+            }, 'Maps Prospector AI'),
+            React.createElement('p', { 
+              className: 'text-gray-400', 
+              key: 'desc' 
+            }, "L'interface est maintenant opérationnelle sur Vercel."),
+            React.createElement('button', { 
+              className: 'bg-accent hover:bg-opacity-80 px-6 py-2 rounded-lg transition-all', 
+              key: 'btn' 
+            }, 'Démarrer la recherche')
+          ]
         );
       }
 
-      const root = createRoot(document.getElementById('root'));
+      const container = document.getElementById('root');
+      const root = createRoot(container);
       root.render(React.createElement(App));
     </script>
 </body>
+
 </html>
 
