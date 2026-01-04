@@ -1,14 +1,22 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { AIInsight, BusinessData, SearchResult } from "../types";
 
-// La clé API est injectée via vite.config.ts depuis VITE_API_KEY
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+// La clé API est injectée via vite.config.ts. 
+// Si elle est absente, on évite le crash immédiat mais les appels échoueront proprement.
+const apiKey = process.env.API_KEY as string;
+const ai = new GoogleGenAI({ apiKey: apiKey || 'dummy_key_to_prevent_init_crash' });
 
 /**
  * Utilise Gemini 2.5 Flash avec Google Maps Grounding pour trouver des entreprises.
  */
 export const searchBusinesses = async (query: string): Promise<SearchResult[]> => {
   try {
+    if (!apiKey) {
+      console.error("API Key manquante (process.env.API_KEY). Vérifiez vos variables d'environnement Vercel ou .env");
+      alert("Erreur de configuration : Clé API manquante.");
+      return [];
+    }
+
     // Stratégie : On demande à Gemini d'utiliser Maps, puis de formater la réponse en JSON pur.
     // Note : On ne peut pas utiliser `responseSchema` en même temps que `tools: googleMaps`.
     
@@ -32,7 +40,6 @@ export const searchBusinesses = async (query: string): Promise<SearchResult[]> =
         Trouve au moins 5 résultats pertinents.`,
         config: {
             tools: [{ googleMaps: {} }],
-            // Pas de responseMimeType: "application/json" ici car incompatible avec les outils sur ce modèle pour l'instant
         }
     });
 
@@ -78,6 +85,8 @@ export const searchBusinesses = async (query: string): Promise<SearchResult[]> =
  */
 export const analyzeProspect = async (business: BusinessData): Promise<AIInsight> => {
     try {
+        if (!apiKey) throw new Error("API Key manquante");
+
         const prompt = `
         Agis comme un expert en développement commercial et stratégie digitale.
         Analyse cette entreprise :
