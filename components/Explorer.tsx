@@ -1,9 +1,17 @@
-import React, { useState, useCallback } from 'react';
-import { SearchResult, Prospect, UserStatus } from '../types';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { SearchResult, Prospect } from '../types';
 import { searchBusinesses, analyzeProspect } from '../services/geminiService';
 import { BusinessCard } from './BusinessCard';
 import { AnalysisModal } from './AnalysisModal';
 import { saveProspect } from '../services/storageService';
+
+// Déclaration globale pour Google Maps
+declare global {
+  interface Window {
+    google: any;
+    initMap: () => void;
+  }
+}
 
 export const Explorer: React.FC = () => {
   const [query, setQuery] = useState('');
@@ -16,6 +24,12 @@ export const Explorer: React.FC = () => {
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [currentInsight, setCurrentInsight] = useState<any>(null);
+
+  // Maps State
+  const mapRef = useRef<HTMLDivElement>(null);
+  const googleMapInstance = useRef<any>(null);
+  const markersRef = useRef<any[]>([]);
+  const hasMapsKey = !!process.env.GOOGLE_MAPS_API_KEY;
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,8 +76,155 @@ export const Explorer: React.FC = () => {
     alert("Prospect sauvegardé dans le CRM !");
   };
 
-  // Mock Map Visualization (Dots on a grid)
-  // Since we don't have a real map provider key for this demo.
+  // --- Google Maps Integration ---
+  
+  // Chargement du script Google Maps
+  useEffect(() => {
+    if (!hasMapsKey) return;
+    if (window.google?.maps) return; // Déjà chargé
+
+    const script = document.createElement('script');
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${process.env.GOOGLE_MAPS_API_KEY}&libraries=places`;
+    script.async = true;
+    script.defer = true;
+    document.head.appendChild(script);
+
+    script.onload = () => {
+        initMap();
+    };
+
+    return () => {
+        // Cleanup if needed
+    };
+  }, [hasMapsKey]);
+
+  // Initialisation de la carte
+  const initMap = () => {
+      if (!mapRef.current || !window.google) return;
+      
+      googleMapInstance.current = new window.google.maps.Map(mapRef.current, {
+          center: { lat: 48.8566, lng: 2.3522 },
+          zoom: 12,
+          styles: [
+            { elementType: "geometry", stylers: [{ color: "#242f3e" }] },
+            { elementType: "labels.text.stroke", stylers: [{ color: "#242f3e" }] },
+            { elementType: "labels.text.fill", stylers: [{ color: "#746855" }] },
+            {
+              featureType: "administrative.locality",
+              elementType: "labels.text.fill",
+              stylers: [{ color: "#d59563" }],
+            },
+            {
+              featureType: "poi",
+              elementType: "labels.text.fill",
+              stylers: [{ color: "#d59563" }],
+            },
+            {
+              featureType: "poi.park",
+              elementType: "geometry",
+              stylers: [{ color: "#263c3f" }],
+            },
+            {
+              featureType: "poi.park",
+              elementType: "labels.text.fill",
+              stylers: [{ color: "#6b9a76" }],
+            },
+            {
+              featureType: "road",
+              elementType: "geometry",
+              stylers: [{ color: "#38414e" }],
+            },
+            {
+              featureType: "road",
+              elementType: "geometry.stroke",
+              stylers: [{ color: "#212a37" }],
+            },
+            {
+              featureType: "road",
+              elementType: "labels.text.fill",
+              stylers: [{ color: "#9ca5b3" }],
+            },
+            {
+              featureType: "road.highway",
+              elementType: "geometry",
+              stylers: [{ color: "#746855" }],
+            },
+            {
+              featureType: "road.highway",
+              elementType: "geometry.stroke",
+              stylers: [{ color: "#1f2835" }],
+            },
+            {
+              featureType: "road.highway",
+              elementType: "labels.text.fill",
+              stylers: [{ color: "#f3d19c" }],
+            },
+            {
+              featureType: "water",
+              elementType: "geometry",
+              stylers: [{ color: "#17263c" }],
+            },
+            {
+              featureType: "water",
+              elementType: "labels.text.fill",
+              stylers: [{ color: "#515c6d" }],
+            },
+            {
+              featureType: "water",
+              elementType: "labels.text.stroke",
+              stylers: [{ color: "#17263c" }],
+            },
+          ],
+          disableDefaultUI: true,
+          zoomControl: true,
+      });
+  };
+
+  // Mise à jour des marqueurs quand les résultats changent
+  useEffect(() => {
+    if (!hasMapsKey || !googleMapInstance.current || !window.google) return;
+
+    // Clear old markers
+    markersRef.current.forEach(m => m.setMap(null));
+    markersRef.current = [];
+
+    const bounds = new window.google.maps.LatLngBounds();
+
+    results.forEach(res => {
+        const marker = new window.google.maps.Marker({
+            position: res.location,
+            map: googleMapInstance.current,
+            title: res.business_data.name,
+            animation: window.google.maps.Animation.DROP,
+        });
+
+        marker.addListener('click', () => {
+            setSelectedResult(res);
+        });
+
+        markersRef.current.push(marker);
+        bounds.extend(res.location);
+    });
+
+    if (results.length > 0) {
+        googleMapInstance.current.fitBounds(bounds);
+        // Avoid zooming in too much if only 1 result
+        if (results.length === 1) {
+            googleMapInstance.current.setZoom(15);
+        }
+    }
+
+  }, [results, hasMapsKey]);
+
+  // Pan to selected result
+  useEffect(() => {
+     if (!hasMapsKey || !googleMapInstance.current || !selectedResult) return;
+     googleMapInstance.current.panTo(selectedResult.location);
+     googleMapInstance.current.setZoom(16);
+  }, [selectedResult, hasMapsKey]);
+
+
+  // --- Fallback Visual (Mock) ---
   const MapVisual = useCallback(() => {
      return (
         <div className="w-full h-full bg-[#111] relative overflow-hidden rounded-xl border border-gray-800 group">
@@ -74,14 +235,12 @@ export const Explorer: React.FC = () => {
              }}></div>
              
              {/* Center Label */}
-             <div className="absolute top-4 left-4 bg-black/60 backdrop-blur text-xs px-2 py-1 rounded border border-gray-700 text-gray-400">
-                Visualisation Gemini Grounding
+             <div className="absolute top-4 left-4 bg-black/60 backdrop-blur text-xs px-2 py-1 rounded border border-gray-700 text-gray-400 z-10">
+                Mode: Visualisation Simplifiée (Ajoutez VITE_GOOGLE_MAPS_API_KEY pour la vue réelle)
              </div>
 
              {/* Points */}
              {results.map((res) => {
-                 // Generate deterministic pseudo-random position based on lat/lng decimals for visual demo
-                 // Real app would use a library like 'pigeon-maps' or Google Maps JS API
                  const latSeed = (res.location.lat * 1000) % 100; 
                  const lngSeed = (res.location.lng * 1000) % 100;
                  const top = Math.abs(latSeed) + '%';
@@ -100,7 +259,7 @@ export const Explorer: React.FC = () => {
                         title={res.business_data.name}
                      >
                         {isSelected && (
-                            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 whitespace-nowrap bg-gray-900 text-white text-xs px-2 py-1 rounded border border-gray-700">
+                            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 whitespace-nowrap bg-gray-900 text-white text-xs px-2 py-1 rounded border border-gray-700 z-20">
                                 {res.business_data.name}
                             </div>
                         )}
@@ -111,12 +270,6 @@ export const Explorer: React.FC = () => {
              {results.length === 0 && !isSearching && (
                  <div className="absolute inset-0 flex items-center justify-center text-gray-600">
                      <p>Effectuez une recherche pour voir les résultats</p>
-                 </div>
-             )}
-             
-             {isSearching && (
-                 <div className="absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-sm z-20">
-                     <div className="text-primary animate-pulse font-medium">Recherche géolocalisée en cours...</div>
                  </div>
              )}
         </div>
@@ -154,7 +307,12 @@ export const Explorer: React.FC = () => {
                     disabled={isSearching}
                     className="w-full bg-primary hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-2 rounded-lg transition-all shadow-lg shadow-primary/20 flex items-center justify-center gap-2"
                 >
-                    {isSearching ? 'Recherche...' : 'Rechercher sur Maps'}
+                    {isSearching ? (
+                        <>
+                           <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                           <span>Recherche...</span>
+                        </>
+                    ) : 'Rechercher sur Maps'}
                 </button>
             </form>
         </div>
@@ -190,7 +348,19 @@ export const Explorer: React.FC = () => {
 
       {/* Map Area */}
       <div className="flex-1 bg-surface p-4 relative">
-         <MapVisual />
+         {/* Conditionnal Rendering : Real Map vs Mock */}
+         {hasMapsKey ? (
+            <div className="w-full h-full rounded-xl overflow-hidden border border-gray-800 relative">
+                <div ref={mapRef} className="w-full h-full bg-gray-900" />
+                {isSearching && (
+                    <div className="absolute inset-0 bg-black/50 backdrop-blur-sm z-20 flex items-center justify-center">
+                         <div className="text-primary font-bold animate-pulse">Recherche Maps en cours...</div>
+                    </div>
+                )}
+            </div>
+         ) : (
+            <MapVisual />
+         )}
          
          {selectedResult && (
              <div className="absolute bottom-8 left-8 right-8 bg-surface/90 backdrop-blur-md border border-gray-700 p-4 rounded-xl shadow-2xl z-20 flex justify-between items-center animate-slide-up">
@@ -205,7 +375,7 @@ export const Explorer: React.FC = () => {
                         rel="noreferrer"
                         className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white font-medium transition-colors"
                      >
-                         Voir sur Google Maps
+                         Ouvrir G-Maps
                      </a>
                      <button
                         onClick={() => handleAnalyze(selectedResult)}
