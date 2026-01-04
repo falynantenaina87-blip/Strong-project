@@ -1,0 +1,7 @@
+{
+  "name": "Maps Prospector AI",
+  "description": "Outil de prospection intelligent utilisant Google Maps et Gemini AI pour identifier, analyser et gérer des cibles commerciales.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
